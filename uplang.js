@@ -1,69 +1,43 @@
 const util = require('util');
 
-//this is all vm'ed so we can clear if need be
-
-// body //system value, is protected
-// updators = [] //mega table of all expos
-//updators get called when a value is updated
-//variables as objects are not clobbered on set, rather there attributes are wiped and copyed
-//this allows for the orderless code consept to work
-
-//a "type" is a pointer representing the type of object //maybe works similar to obj.prototype?
-let expoNativeType = {} //any type of object js supports
-let expoEmptyType = {} //the value is empty
-let expoFuncType = {} //value is a native function
-let expoUserFuncType = {} //value is a native function
-
-//whenever I "l = doThis(k,g,v())" I copy the values of doThis into l and set the children property
 
 let nop = function () {}
 
 class Expo{ //basic expression object
-  [util.inspect.custom](depth, options) {
+  [util.inspect.custom](depth, options) { //
     return this.toString();
   }
   constructor(){
     this.wipe()
   }
-  setupTarget(value){
-    this.target = value
-    return this
-  }
   wipe(){ //removes values from object
-    this._value = null //raw value
-//    this.getValue = null
-//    this.setValue = null
+    this._value = null //literal value
     this.children = [] //value defining children values to querry
     this.data = {} //data storage
     this.listens = false //listener type
-//    this.type = expoEmptyType
-//    this.onConstruct = nop //wipe constsruct event
   }
   get value(){ //chain get value
-    if(this.env.alive === false)return this.errorCatch(CodeError("env has stopped"));
-    let src = this;
-    //console.log(src,src._value);
+    if(this.env.alive === false)return this.errorCatch(CodeError("script has stopped"));
+    let src = this; //souce value
+
     while(src.upValue !== undefined){
       src = src.env.stackTop[src.upValue]; //point to correct object
       if(!src)return null; //empty upvalues are null and not error, in js (a => a === undefined )() -> true, //this.errorCatch(new CodeError(`upvalue contains no object`));
     }
 
+    //src is now at correct object
 
     if(src.target){//is a setter therefore has a target
-      let target = src.target
+      let target = src.target //efficency copy
 
 
       target.data = Object.assign({},src.data) //shallow copy data object
       if(src.call){//is a function call
-        //console.log(target.call.type)
-        //throw 0
-        //target.call = src.call
-        //target.children = src.children
+
         Object.assign(target,src)
         target.target = undefined
-        //console.log(target.children)
       }
-      else if(src.clobber){//its a word
+      else if(src.clobber){//its a word (clobber value clobbers whatever was in target)
         Object.assign(target,src.clobber)
       }
       else{//no, its a value
@@ -72,19 +46,18 @@ class Expo{ //basic expression object
     }else{
       if(src.call){//is a function call
         let fn = src.call.run
-        if(fn) return this.errorCatch(fn(src,src.call,src.children,src.data));
+        if(fn) return this.errorCatch(fn(src,src.call,src.children,src.data)); //expo.run = function(caller,self,arguments,dataStorage){ ... }
         else {
-        debugger;
         return this.errorCatch(new CodeError(`caller, ${src.call.toString()} has no code `))
         }
       }else{//no, its a value
-        return this.errorCatch(src._value)
+        return this.errorCatch(src._value) //errorCatch here is mildly pointless
       }
     }
     return null;
   }
 
-  get type(){ //chain get value
+  get type(){ //what type is it?
     if(this.target){//is a setter therefore has a target
       if(this.call){//is a function call
         return `setTo call`
@@ -97,7 +70,7 @@ class Expo{ //basic expression object
       if(this.call){//is a function call
           return "call"
       }
-      if(this.upValue !== undefined){
+      if(this.upValue !== undefined){ //is an upvalue therefore has .upvalue
         return "upvalue"
       }
       else{//no, its a value
@@ -105,7 +78,7 @@ class Expo{ //basic expression object
       }
     }
 
-    return null;
+    return null; //its nothing?!
   }
   get location(){
     let n = this.context
@@ -114,6 +87,7 @@ class Expo{ //basic expression object
 
   }
   toString(){
+    //totally needs reform
     return `${this.location} = [${this.target ? "("+this.target.location+") " : ""}${this.type == "value" ? typeof this._value+" " : ""}${this.type}${this.call ? ` of ${this.call.location}` : ""}]`
   }
   errorCatch(error){
@@ -184,8 +158,9 @@ exports.Env = Env
 //const homedir = require('os').homedir();
 //const fs = require('fs');
 
-  let $break = [] //represents the break between statements
+  let $break = Object.create(null) //token that represents the break between statements
   $break[0] = "break"
+  Object.freeze($break)
 
 class CompileError extends Error {
   constructor(message,text,position) {
@@ -438,14 +413,22 @@ let compilePt1 = function(data){
 exports.compilePt1 = compilePt1
 
 let compilePt2 = function(data,estruct,textData){
-  let cstack = ['main']
+  let cstack = ['root','sys','func','main'] //stack of what to look at when looking up
   let ctop = ()=> cstack[cstack.length-1]
+  let cGet = key => {
+    let l;
+    for (let i = cstack.length-1; l => 0;i--){
+      l = estruct.context(cstack[i])
+      if(l.itemExists(key))return l.item(key);
+    }
+    return ctop();
+  }
 
   this.scanArgs = (chain,est,newst) => {
     newst= newst || []
     let unow = new Expo() //object w/ number keys too
     unow.env = estruct
-    let push = ()=>{
+    let push = ()=>{ //push: push and prepare new
       newst.push(unow)
       unow = new Expo()
       unow.env = estruct
@@ -460,7 +443,7 @@ let compilePt2 = function(data,estruct,textData){
             throw CompileError("too many setters per statement",data,l.i)
           }else{
             //console.log(l[1])
-            unow.setupTarget( estruct.context(l[2] || ctop()).item(l[1]) )
+            unow.target = ( estruct.context(l[2] || ctop()).item(l[1]) ) // .target = specific || top of stack
             //console.log(ctop())
           }
           break;
@@ -476,11 +459,9 @@ let compilePt2 = function(data,estruct,textData){
           push()
           break;
         case "call":
-          unow.call = ( estruct.context(l[2] || ctop()).item(l[1]) )
-          //console.log(l[3])
+          unow.call = ( estruct.context( l[2] || cGet(l[1]) ).item(l[1]) ) // .call = specific || topmost existing key
           unow.children = this.scanArgs(l[3],estruct)
-          //console.log(unow.children);
-          debugger;
+
           {
             let call = unow.call
             if(call.onCallExpoFab)call.onCallExpoFab(unow) //whenever a new call type Expo is fabricated
@@ -489,9 +470,9 @@ let compilePt2 = function(data,estruct,textData){
           break;
         case "word":
           if(unow.target){
-            unow.impaler = estruct.context(l[2] || ctop()).item(l[1]) //literal copy operation
+            unow.impaler = estruct.context(l[2] || cGet(l[1])).item(l[1]) //literal copy operation // .impailer = specific || topmost existing key
           }else{
-            unow = estruct.context(l[2] || ctop()).item(l[1])
+            unow = estruct.context(l[2] || cGet(l[1])).item(l[1]) // unow = specific || topmost existing key
           }
           push()
           break;
@@ -681,20 +662,3 @@ Env.prototype.runCode = function (code) {
   }
   return moob;
 };
-
-//setInterval(i=>i,500000)
-
-///*
-let test_estruct = new Env()
-test_estruct.addComonFunctions()
-
-console.log(
-test_estruct.runCode(`
-  print($0 7 A 2)
-
-  a@func = func( print($0) )
-  a(7)
-  `)
-)
-//*/
-//console.log( test_estruct.context("main").item("mydo").value)
